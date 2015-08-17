@@ -73,24 +73,21 @@ func TestShardWriter_RemoteMapper_Success(t *testing.T) {
 	}
 
 	// Get first chunk from mapper.
-	chunk, err := r.NextChunk()
+	var output tsdb.MapperOutput
+	err := r.NextChunk(&output)
 	if err != nil {
 		t.Fatalf("failed to get next chunk from mapper: %s", err.Error())
-	}
-	output, ok := chunk.(*tsdb.MapperOutput)
-	if !ok {
-		t.Fatal("chunk is not of expected type")
 	}
 	if output.Name != "cpu" {
 		t.Fatalf("received output incorrect, exp: %v, got %v", expOutput, output)
 	}
 
 	// Next chunk should be nil, indicating no more data.
-	chunk, err = r.NextChunk()
+	err = r.NextChunk(&output)
 	if err != nil {
 		t.Fatalf("failed to get next chunk from mapper: %s", err.Error())
 	}
-	if chunk != nil {
+	if !output.Empty() {
 		t.Fatal("received more chunks when none expected")
 	}
 }

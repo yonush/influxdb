@@ -35,6 +35,10 @@ type MapperOutput struct {
 	cursorKey string            // Tagset-based key for the source cursor. Cached for performance reasons.
 }
 
+func (mo *MapperOutput) Empty() bool {
+	return mo.Name == ""
+}
+
 func (mo *MapperOutput) key() string {
 	return mo.cursorKey
 }
@@ -254,22 +258,24 @@ func (lm *LocalMapper) Open() error {
 	return nil
 }
 
-func (lm *LocalMapper) NextChunk() (interface{}, error) {
+func (lm *LocalMapper) NextChunk(mo *MapperOutput) error {
 	if lm.rawMode {
-		return lm.nextChunkRaw()
+		return lm.nextChunkRaw(mo)
 	}
-	return lm.nextChunkAgg()
+	return lm.nextChunkAgg(mo)
 }
 
 // nextChunkRaw returns the next chunk of data. Data comes in the same order as the
 // tags return by TagSets. A chunk never contains data for more than 1 tagset.
 // If there is no more data for any tagset, nil will be returned.
-func (lm *LocalMapper) nextChunkRaw() (*MapperOutput, error) {
-	var output *MapperOutput
+func (lm *LocalMapper) nextChunkRaw(mo *MapperOutput) error {
+	// the mapperoutput that was passed in might have been filled with old values
+	// clear it out.
+	*mo = MapperOutput{}
 	for {
 		if lm.currCursorIndex == len(lm.cursors) {
 			// All tagset cursors processed. NextChunk'ing complete.
-			return nil, nil
+			return nil
 		}
 		cursor := lm.cursors[lm.currCursorIndex]
 
@@ -277,17 +283,18 @@ func (lm *LocalMapper) nextChunkRaw() (*MapperOutput, error) {
 		if v == nil {
 			// Tagset cursor is empty, move to next one.
 			lm.currCursorIndex++
-			if output != nil {
+			if !mo.Empty() {
 				// There is data, so return it and continue when next called.
-				return output, nil
+				return nil
 			} else {
 				// Just go straight to the next cursor.
 				continue
 			}
 		}
 
-		if output == nil {
-			output = &MapperOutput{
+		// got a cursor. init the map output and append whatever we got from that cursor
+		if mo.Empty() {
+			*mo = MapperOutput{
 				Name:      cursor.measurement,
 				Tags:      cursor.tags,
 				Fields:    lm.selectFields,
@@ -295,9 +302,9 @@ func (lm *LocalMapper) nextChunkRaw() (*MapperOutput, error) {
 			}
 		}
 		value := &MapperValue{Time: k, Value: v, Tags: t}
-		output.Values = append(output.Values, value)
-		if len(output.Values) == lm.chunkSize {
-			return output, nil
+		mo.Values = append(mo.Values, value)
+		if len(mo.Values) == lm.chunkSize {
+			return nil
 		}
 	}
 }
@@ -306,12 +313,12 @@ func (lm *LocalMapper) nextChunkRaw() (*MapperOutput, error) {
 // for the current tagset. Tagsets are always processed in the same order as that
 // returned by AvailTagsSets(). When there is no more data for any tagset nil
 // is returned.
-func (lm *LocalMapper) nextChunkAgg() (*MapperOutput, error) {
-	var output *MapperOutput
+func (lm *LocalMapper) nextChunkAgg(mo *MapperOutput) error {
+	*mo = MapperOutput{}
 	for {
 		if lm.currCursorIndex == len(lm.cursors) {
 			// All tagset cursors processed. NextChunk'ing complete.
-			return nil, nil
+			return nil
 		}
 		tsc := lm.cursors[lm.currCursorIndex]
 		tmin, tmax := lm.nextInterval()
@@ -325,8 +332,8 @@ func (lm *LocalMapper) nextChunkAgg() (*MapperOutput, error) {
 
 		// Prep the return data for this tagset. This will hold data for a single interval
 		// for a single tagset.
-		if output == nil {
-			output = &MapperOutput{
+		if mo.Empty() {
+			*mo = MapperOutput{
 				Name:      tsc.measurement,
 				Tags:      tsc.tags,
 				Fields:    lm.selectFields,
@@ -335,9 +342,9 @@ func (lm *LocalMapper) nextChunkAgg() (*MapperOutput, error) {
 			}
 			// Aggregate values only use the first entry in the Values field. Set the time
 			// to the start of the interval.
-			output.Values[0] = &MapperValue{
+			mo.Values[0] = &MapperValue{
 				Time:  tmin,
-				Value: make([]interface{}, 0)}
+				Value: make([]interface{}, 0, len(lm.mapFuncs))}
 		}
 
 		// Always clamp tmin. This can happen as bucket-times are bucketed to the nearest
@@ -377,10 +384,10 @@ func (lm *LocalMapper) nextChunkAgg() (*MapperOutput, error) {
 
 			// Execute the map function which walks the entire interval, and aggregates
 			// the result.
-			values := output.Values[0].Value.([]interface{})
-			output.Values[0].Value = append(values, lm.mapFuncs[i](tagSetCursor))
+			values := mo.Values[0].Value.([]interface{})
+			mo.Values[0].Value = append(values, lm.mapFuncs[i](tagSetCursor))
 		}
-		return output, nil
+		return nil
 	}
 }
 

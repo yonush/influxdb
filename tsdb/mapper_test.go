@@ -136,7 +136,7 @@ func TestShardMapper_WriteAndSingleMapperRawQuerySingleValue(t *testing.T) {
 	}{
 		{
 			stmt:     `SELECT load FROM cpu`,
-			expected: []string{`{"name":"cpu","fields":["load"],"values":[{"time":1000000000,"value":42,"tags":{"host":"serverA","region":"us-east"}},{"time":2000000000,"value":60,"tags":{"host":"serverB","region":"us-east"}}]}`, `null`},
+			expected: []string{`{"name":"cpu","fields":["load"],"values":[{"time":1000000000,"value":42,"tags":{"host":"serverA","region":"us-east"}},{"time":2000000000,"value":60,"tags":{"host":"serverB","region":"us-east"}}]}`, `{}`},
 		},
 		{
 			stmt:      `SELECT load FROM cpu # chunkSize 1`,
@@ -174,7 +174,7 @@ func TestShardMapper_WriteAndSingleMapperRawQuerySingleValue(t *testing.T) {
 		},
 		{
 			stmt:     `SELECT load FROM cpu WHERE host='serverC'`,
-			expected: []string{`null`},
+			expected: []string{`{}`},
 		},
 		{
 			stmt:     `SELECT load FROM cpu WHERE load = 60`,
@@ -194,7 +194,7 @@ func TestShardMapper_WriteAndSingleMapperRawQuerySingleValue(t *testing.T) {
 		},
 		{
 			stmt:     fmt.Sprintf(`SELECT load FROM cpu WHERE time > '%s'`, pt2time.Format(influxql.DateTimeFormat)),
-			expected: []string{`null`},
+			expected: []string{`{}`},
 		},
 	}
 
@@ -308,11 +308,11 @@ func TestShardMapper_WriteAndSingleMapperRawQueryMultiSource(t *testing.T) {
 		},
 		{
 			stmt:     `SELECT bar FROM cpu0,cpu1 WHERE foo=42`,
-			expected: []string{`null`},
+			expected: []string{`{}`},
 		},
 		{
 			stmt:     `SELECT bar FROM cpu0,cpu1 WHERE bar!=60`,
-			expected: []string{`null`},
+			expected: []string{`{}`},
 		},
 	}
 
@@ -360,55 +360,55 @@ func TestShardMapper_WriteAndSingleMapperAggregateQuery(t *testing.T) {
 	}{
 		{
 			stmt:     `SELECT sum(value) FROM cpu`,
-			expected: []string{`{"name":"cpu","fields":["value"],"values":[{"value":[61]}]}`, `null`},
+			expected: []string{`{"name":"cpu","fields":["value"],"values":[{"value":[61]}]}`, `{}`},
 		},
 		{
 			stmt:     `SELECT sum(value),mean(value) FROM cpu`,
-			expected: []string{`{"name":"cpu","fields":["value"],"values":[{"value":[61,{"Count":2,"Mean":30.5,"ResultType":1}]}]}`, `null`},
+			expected: []string{`{"name":"cpu","fields":["value"],"values":[{"value":[61,{"Count":2,"Mean":30.5,"ResultType":1}]}]}`, `{}`},
 		},
 		{
 			stmt: `SELECT sum(value) FROM cpu GROUP BY host`,
 			expected: []string{
 				`{"name":"cpu","tags":{"host":"serverA"},"fields":["value"],"values":[{"value":[1]}]}`,
 				`{"name":"cpu","tags":{"host":"serverB"},"fields":["value"],"values":[{"value":[60]}]}`,
-				`null`},
+				`{}`},
 		},
 		{
 			stmt: `SELECT sum(value) FROM cpu GROUP BY region`,
 			expected: []string{
 				`{"name":"cpu","tags":{"region":"us-east"},"fields":["value"],"values":[{"value":[61]}]}`,
-				`null`},
+				`{}`},
 		},
 		{
 			stmt: `SELECT sum(value) FROM cpu GROUP BY region,host`,
 			expected: []string{
 				`{"name":"cpu","tags":{"host":"serverA","region":"us-east"},"fields":["value"],"values":[{"value":[1]}]}`,
 				`{"name":"cpu","tags":{"host":"serverB","region":"us-east"},"fields":["value"],"values":[{"value":[60]}]}`,
-				`null`},
+				`{}`},
 		},
 		{
 			stmt: `SELECT sum(value) FROM cpu WHERE host='serverB'`,
 			expected: []string{
 				`{"name":"cpu","fields":["value"],"values":[{"value":[60]}]}`,
-				`null`},
+				`{}`},
 		},
 		{
 			stmt: fmt.Sprintf(`SELECT sum(value) FROM cpu WHERE time = '%s'`, pt1time.Format(influxql.DateTimeFormat)),
 			expected: []string{
 				`{"name":"cpu","fields":["value"],"values":[{"time":10000000000,"value":[1]}]}`,
-				`null`},
+				`{}`},
 		},
 		{
 			stmt: fmt.Sprintf(`SELECT sum(value) FROM cpu WHERE time > '%s'`, pt1time.Format(influxql.DateTimeFormat)),
 			expected: []string{
 				`{"name":"cpu","fields":["value"],"values":[{"time":10000000001,"value":[60]}]}`,
-				`null`},
+				`{}`},
 		},
 		{
 			stmt: fmt.Sprintf(`SELECT sum(value) FROM cpu WHERE time > '%s'`, pt2time.Format(influxql.DateTimeFormat)),
 			expected: []string{
 				`{"name":"cpu","fields":["value"],"values":[{"time":20000000001,"value":[null]}]}`,
-				`null`},
+				`{}`},
 		},
 	}
 
@@ -520,11 +520,12 @@ func openRawMapperOrFail(t *testing.T, shard *tsdb.Shard, stmt *influxql.SelectS
 }
 
 func nextRawChunkAsJson(t *testing.T, mapper tsdb.Mapper) string {
-	r, err := mapper.NextChunk()
+	var r tsdb.MapperOutput
+	err := mapper.NextChunk(&r)
 	if err != nil {
 		t.Fatalf("failed to get next chunk from mapper: %s", err.Error())
 	}
-	b, err := json.Marshal(r)
+	b, err := json.Marshal(&r)
 	if err != nil {
 		t.Fatalf("failed to marshal chunk as JSON: %s", err.Error())
 	}
@@ -541,11 +542,12 @@ func openLocalMapperOrFail(t *testing.T, shard *tsdb.Shard, stmt *influxql.Selec
 }
 
 func aggIntervalAsJson(t *testing.T, mapper *tsdb.LocalMapper) string {
-	r, err := mapper.NextChunk()
+	var r tsdb.MapperOutput
+	err := mapper.NextChunk(&r)
 	if err != nil {
 		t.Fatalf("failed to get chunk from aggregate mapper: %s", err.Error())
 	}
-	b, err := json.Marshal(r)
+	b, err := json.Marshal(&r)
 	if err != nil {
 		t.Fatalf("failed to marshal chunk as JSON: %s", err.Error())
 	}

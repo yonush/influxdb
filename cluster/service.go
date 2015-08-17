@@ -255,11 +255,12 @@ func (s *Service) processMapShardRequest(w io.Writer, buf []byte) error {
 			metaSent = true
 		}
 
-		chunk, err := m.NextChunk()
+		var chunk tsdb.MapperOutput
+		err := m.NextChunk(&chunk)
 		if err != nil {
 			return fmt.Errorf("next chunk: %s", err)
 		}
-		if chunk != nil {
+		if !chunk.Empty() {
 			b, err := json.Marshal(chunk)
 			if err != nil {
 				return fmt.Errorf("encoding: %s", err)
@@ -273,7 +274,7 @@ func (s *Service) processMapShardRequest(w io.Writer, buf []byte) error {
 			return err
 		}
 
-		if chunk == nil {
+		if chunk.Empty() {
 			// All mapper data sent.
 			return nil
 		}

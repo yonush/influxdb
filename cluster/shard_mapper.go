@@ -167,8 +167,9 @@ func (r *RemoteMapper) Fields() []string {
 }
 
 // NextChunk returns the next chunk read from the remote node to the client.
-func (r *RemoteMapper) NextChunk() (chunk interface{}, err error) {
-	output := &tsdb.MapperOutput{}
+func (r *RemoteMapper) NextChunk(mo *tsdb.MapperOutput) error {
+	// clear out, this output may contain old values
+	*mo = tsdb.MapperOutput{}
 	var response *MapShardResponse
 
 	if r.bufferedResponse != nil {
@@ -181,24 +182,23 @@ func (r *RemoteMapper) NextChunk() (chunk interface{}, err error) {
 		_, buf, err := ReadTLV(r.conn)
 		if err != nil {
 			r.conn.MarkUnusable()
-			return nil, err
+			return err
 		}
 
 		// Unmarshal response.
 		if err := response.UnmarshalBinary(buf); err != nil {
-			return nil, err
+			return err
 		}
 
 		if response.Code() != 0 {
-			return nil, fmt.Errorf("error code %d: %s", response.Code(), response.Message())
+			return fmt.Errorf("error code %d: %s", response.Code(), response.Message())
 		}
 	}
 
 	if response.Data() == nil {
-		return nil, nil
+		return nil
 	}
-	err = json.Unmarshal(response.Data(), output)
-	return output, err
+	return json.Unmarshal(response.Data(), mo)
 }
 
 // Close the Mapper

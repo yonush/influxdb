@@ -26,7 +26,7 @@ type Mapper interface {
 	Open() error
 	TagSets() []string
 	Fields() []string
-	NextChunk() (interface{}, error)
+	NextChunk(m *MapperOutput) error
 	Close()
 }
 
@@ -34,23 +34,17 @@ type Mapper interface {
 // track for that mapper.
 type StatefulMapper struct {
 	Mapper
-	bufferedChunk *MapperOutput // Last read chunk.
+	bufferedChunk MapperOutput // Last read chunk.
 	drained       bool
 }
 
 // NextChunk wraps a RawMapper and some state.
-func (sm *StatefulMapper) NextChunk() (*MapperOutput, error) {
-	c, err := sm.Mapper.NextChunk()
+func (sm *StatefulMapper) NextChunk() error {
+	err := sm.Mapper.NextChunk(&sm.bufferedChunk)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	chunk, ok := c.(*MapperOutput)
-	if !ok {
-		if chunk == interface{}(nil) {
-			return nil, nil
-		}
-	}
-	return chunk, nil
+	return nil
 }
 
 type Executor struct {
@@ -64,7 +58,10 @@ type Executor struct {
 func NewExecutor(stmt *influxql.SelectStatement, mappers []Mapper, chunkSize int) *Executor {
 	a := []*StatefulMapper{}
 	for _, m := range mappers {
-		a = append(a, &StatefulMapper{m, nil, false})
+		a = append(a, &StatefulMapper{
+			Mapper:  m,
+			drained: false,
+		})
 	}
 	return &Executor{
 		stmt:           stmt,
@@ -106,7 +103,7 @@ func (e *Executor) mappersDrained() bool {
 func (e *Executor) nextMapperTagSet() string {
 	tagset := ""
 	for _, m := range e.mappers {
-		if m.bufferedChunk != nil {
+		if !m.bufferedChunk.Empty() {
 			if tagset == "" {
 				tagset = m.bufferedChunk.key()
 			} else if m.bufferedChunk.key() < tagset {
@@ -121,7 +118,7 @@ func (e *Executor) nextMapperTagSet() string {
 func (e *Executor) nextMapperLowestTime(tagset string) int64 {
 	minTime := int64(math.MaxInt64)
 	for _, m := range e.mappers {
-		if !m.drained && m.bufferedChunk != nil {
+		if !m.drained && !m.bufferedChunk.Empty() {
 			if m.bufferedChunk.key() != tagset {
 				continue
 			}
@@ -186,13 +183,13 @@ func (e *Executor) executeRaw(out chan *influxql.Row) {
 
 			// Set the next buffered chunk on the mapper, or mark it drained.
 			for {
-				if m.bufferedChunk == nil {
-					m.bufferedChunk, err = m.NextChunk()
+				if m.bufferedChunk.Empty() {
+					err = m.NextChunk()
 					if err != nil {
 						out <- &influxql.Row{Err: err}
 						return
 					}
-					if m.bufferedChunk == nil {
+					if m.bufferedChunk.Empty() {
 						// Mapper can do no more for us.
 						m.drained = true
 						break
@@ -215,7 +212,7 @@ func (e *Executor) executeRaw(out chan *influxql.Row) {
 
 				if e.tagSetIsLimited(m.bufferedChunk.Name) {
 					// chunk's tagset is limited, so no good. Try again.
-					m.bufferedChunk = nil
+					m.bufferedChunk = MapperOutput{}
 					continue
 				}
 				// This mapper has a chunk available, and it is not limited.
@@ -283,7 +280,7 @@ func (e *Executor) executeRaw(out chan *influxql.Row) {
 
 			// If we emptied out all the values, clear the mapper's buffered chunk.
 			if len(m.bufferedChunk.Values) == 0 {
-				m.bufferedChunk = nil
+				m.bufferedChunk = MapperOutput{}
 			}
 		}
 
@@ -374,12 +371,12 @@ func (e *Executor) executeAggregate(out chan *influxql.Row) {
 	// Prime each mapper's chunk buffer.
 	var err error
 	for _, m := range e.mappers {
-		m.bufferedChunk, err = m.NextChunk()
+		err = m.NextChunk()
 		if err != nil {
 			out <- &influxql.Row{Err: err}
 			return
 		}
-		if m.bufferedChunk == nil {
+		if m.bufferedChunk.Empty() {
 			m.drained = true
 		}
 	}
@@ -389,7 +386,12 @@ func (e *Executor) executeAggregate(out chan *influxql.Row) {
 		// Send out data for the next alphabetically-lowest tagset. All Mappers send out in this order
 		// so collect data for this tagset, ignoring all others.
 		tagset := e.nextMapperTagSet()
-		chunks := []*MapperOutput{}
+
+		// Prep a row, ready for kicking out.
+		var row *influxql.Row
+
+		// Prep for bucketing data by start time of the interval.
+		buckets := map[int64][][]interface{}{}
 
 		// Pull as much as possible from each mapper. Stop when a mapper offers
 		// data for a new tagset, or empties completely.
@@ -399,13 +401,13 @@ func (e *Executor) executeAggregate(out chan *influxql.Row) {
 			}
 
 			for {
-				if m.bufferedChunk == nil {
-					m.bufferedChunk, err = m.NextChunk()
+				if m.bufferedChunk.Empty() {
+					err = m.NextChunk()
 					if err != nil {
 						out <- &influxql.Row{Err: err}
 						return
 					}
-					if m.bufferedChunk == nil {
+					if m.bufferedChunk.Empty() {
 						m.drained = true
 						break
 					}
@@ -417,34 +419,26 @@ func (e *Executor) executeAggregate(out chan *influxql.Row) {
 					break
 				}
 				// We can, take it.
-				chunks = append(chunks, m.bufferedChunk)
-				m.bufferedChunk = nil
-			}
-		}
+				chunk := m.bufferedChunk
+				m.bufferedChunk = MapperOutput{}
 
-		// Prep a row, ready for kicking out.
-		var row *influxql.Row
-
-		// Prep for bucketing data by start time of the interval.
-		buckets := map[int64][][]interface{}{}
-
-		for _, chunk := range chunks {
-			if row == nil {
-				row = &influxql.Row{
-					Name:    chunk.Name,
-					Tags:    chunk.Tags,
-					Columns: columnNames,
+				// first usable chunk. Init the row
+				if row == nil {
+					row = &influxql.Row{
+						Name:    chunk.Name,
+						Tags:    chunk.Tags,
+						Columns: columnNames,
+					}
 				}
-			}
-
-			startTime := chunk.Values[0].Time
-			_, ok := buckets[startTime]
-			values := chunk.Values[0].Value.([]interface{})
-			if !ok {
-				buckets[startTime] = make([][]interface{}, len(values))
-			}
-			for i, v := range values {
-				buckets[startTime][i] = append(buckets[startTime][i], v)
+				startTime := chunk.Values[0].Time
+				_, ok := buckets[startTime]
+				values := chunk.Values[0].Value.([]interface{})
+				if !ok {
+					buckets[startTime] = make([][]interface{}, len(values))
+				}
+				for i, v := range values {
+					buckets[startTime][i] = append(buckets[startTime][i], v)
+				}
 			}
 		}
 
