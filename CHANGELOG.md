@@ -1,3 +1,9 @@
+## v1.0.0 [unreleased]
+
+### Bugfixes
+
+- [#6543](https://github.com/influxdata/influxdb/issues/6543): Fix parseFill to check for fill ident before attempting to parse an expression.
+
 ## v0.13.0 [unreleased]
 
 ### Release Notes
