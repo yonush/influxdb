@@ -22,6 +22,7 @@
 - [#6686](https://github.com/influxdata/influxdb/pull/6686): Optimize timestamp run-length decoding
 - [#6713](https://github.com/influxdata/influxdb/pull/6713): Reduce allocations during query parsing.
 - [#3733](https://github.com/influxdata/influxdb/issues/3733): Modify the default retention policy name and make it configurable.
+- [#6805](https://github.com/influxdata/influxdb/issues/6805): Allow any variant of the help option to trigger the help.
 
 ### Bugfixes
 
