@@ -6,7 +6,6 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/apex/log"
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/influxql"
@@ -100,10 +100,8 @@ type Shard struct {
 	// expvar-based stats.
 	statMap *expvar.Map
 
-	logger *log.Logger
+	logger log.Interface
 
-	// The writer used by the logger.
-	LogOutput    io.Writer
 	EnableOnOpen bool
 }
 
@@ -132,22 +130,22 @@ func NewShard(id uint64, index *DatabaseIndex, path string, walPath string, opti
 		database:        db,
 		retentionPolicy: rp,
 
-		statMap:      statMap,
-		LogOutput:    os.Stderr,
+		statMap: statMap,
+		logger: log.WithFields(log.Fields{
+			"shard": id,
+			"path":  path,
+		}),
 		EnableOnOpen: true,
 	}
-	s.SetLogOutput(os.Stderr)
 	return s
 }
 
-// SetLogOutput sets the writer to which log output will be written. It must
-// not be called after the Open method has been called.
-func (s *Shard) SetLogOutput(w io.Writer) {
-	s.LogOutput = w
-	s.logger = log.New(w, "[shard] ", log.LstdFlags)
-	if err := s.ready(); err == nil {
-		s.engine.SetLogOutput(w)
-	}
+// WithLogger changes log interface that this shard should use.
+func (s *Shard) WithLogger(l log.Interface) {
+	s.logger = l.WithFields(log.Fields{
+		"shard": s.id,
+		"path":  s.path,
+	})
 }
 
 // SetEnabled enables the shard for queries and write.  When disabled, all
@@ -184,7 +182,7 @@ func (s *Shard) Open() error {
 		}
 
 		// Set log output on the engine.
-		e.SetLogOutput(s.LogOutput)
+		e.WithLogger(s.logger)
 
 		// Disable compactions while loading the index
 		e.SetEnabled(false)
@@ -205,7 +203,7 @@ func (s *Shard) Open() error {
 
 		s.engine = e
 
-		s.logger.Printf("%s database index loaded in %s", s.path, time.Now().Sub(start))
+		s.logger.WithField("duration", time.Now().Sub(start)).Info("database index loaded")
 
 		go s.monitorSize()
 
@@ -656,7 +654,7 @@ func (s *Shard) monitorSize() {
 		case <-t.C:
 			size, err := s.DiskSize()
 			if err != nil {
-				s.logger.Printf("Error collecting shard size: %v", err)
+				s.logger.Infof("Error collecting shard size: %v", err)
 				continue
 			}
 			sizeStat := new(expvar.Int)

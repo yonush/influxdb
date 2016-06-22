@@ -11,6 +11,7 @@ import (
 	"runtime/pprof"
 	"time"
 
+	apexlog "github.com/apex/log"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/coordinator"
 	"github.com/influxdata/influxdb/influxql"
@@ -53,6 +54,7 @@ type Server struct {
 	Listener    net.Listener
 
 	Logger *log.Logger
+	logger apexlog.Interface
 
 	MetaClient *meta.Client
 
@@ -135,6 +137,7 @@ func NewServer(c *Config, buildInfo *BuildInfo) (*Server, error) {
 		BindAddress: bind,
 
 		Logger: log.New(os.Stderr, "", log.LstdFlags),
+		logger: apexlog.Log,
 
 		MetaClient: meta.NewClient(c.Meta),
 
@@ -262,8 +265,8 @@ func (s *Server) Open() error {
 
 	// Configure logging for all services and clients.
 	w := s.logOutput
-	s.MetaClient.SetLogOutput(w)
-	s.TSDBStore.SetLogOutput(w)
+	s.MetaClient.WithLogger(s.logger)
+	s.TSDBStore.WithLogger(s.logger)
 	if s.config.Data.QueryLogEnabled {
 		s.QueryExecutor.SetLogOutput(w)
 	}
