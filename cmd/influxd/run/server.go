@@ -2,8 +2,6 @@ package run
 
 import (
 	"fmt"
-	"io"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,7 +9,7 @@ import (
 	"runtime/pprof"
 	"time"
 
-	apexlog "github.com/apex/log"
+	"github.com/apex/log"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/coordinator"
 	"github.com/influxdata/influxdb/influxql"
@@ -53,8 +51,7 @@ type Server struct {
 	BindAddress string
 	Listener    net.Listener
 
-	Logger *log.Logger
-	logger apexlog.Interface
+	Logger log.Interface
 
 	MetaClient *meta.Client
 
@@ -87,10 +84,6 @@ type Server struct {
 	tcpAddr string
 
 	config *Config
-
-	// logOutput is the writer to which all services should be configured to
-	// write logs to after appension.
-	logOutput io.Writer
 }
 
 // NewServer returns a new instance of Server built from a config.
@@ -136,8 +129,7 @@ func NewServer(c *Config, buildInfo *BuildInfo) (*Server, error) {
 
 		BindAddress: bind,
 
-		Logger: log.New(os.Stderr, "", log.LstdFlags),
-		logger: apexlog.Log,
+		Logger: log.Log,
 
 		MetaClient: meta.NewClient(c.Meta),
 
@@ -149,8 +141,7 @@ func NewServer(c *Config, buildInfo *BuildInfo) (*Server, error) {
 		httpUseTLS:  c.HTTPD.HTTPSEnabled,
 		tcpAddr:     bind,
 
-		config:    c,
-		logOutput: os.Stderr,
+		config: c,
 	}
 
 	if err := s.MetaClient.Open(); err != nil {
@@ -207,9 +198,8 @@ func (s *Server) appendSnapshotterService() {
 
 // SetLogOutput sets the logger used for all messages. It must not be called
 // after the Open method has been called.
-func (s *Server) SetLogOutput(w io.Writer) {
-	s.Logger = log.New(os.Stderr, "", log.LstdFlags)
-	s.logOutput = w
+func (s *Server) WithLogger(l log.Interface) {
+	s.Logger = l
 }
 
 // Err returns an error channel that multiplexes all out of band errors received from all services.
@@ -264,19 +254,18 @@ func (s *Server) Open() error {
 	s.SnapshotterService.Listener = mux.Listen(snapshotter.MuxHeader)
 
 	// Configure logging for all services and clients.
-	w := s.logOutput
-	s.MetaClient.WithLogger(s.logger)
-	s.TSDBStore.WithLogger(s.logger)
+	s.MetaClient.WithLogger(s.Logger)
+	s.TSDBStore.WithLogger(s.Logger)
 	if s.config.Data.QueryLogEnabled {
-		s.QueryExecutor.WithLogger(s.logger)
+		s.QueryExecutor.WithLogger(s.Logger)
 	}
-	s.PointsWriter.SetLogOutput(w)
-	s.Subscriber.WithLogger(s.logger)
+	s.PointsWriter.WithLogger(s.Logger)
+	s.Subscriber.WithLogger(s.Logger)
 	for _, svc := range s.Services {
-		svc.WithLogger(s.logger)
+		svc.WithLogger(s.Logger)
 	}
-	s.SnapshotterService.WithLogger(s.logger)
-	s.Monitor.WithLogger(s.logger)
+	s.SnapshotterService.WithLogger(s.Logger)
+	s.Monitor.WithLogger(s.Logger)
 
 	// Open TSDB store.
 	if err := s.TSDBStore.Open(); err != nil {
@@ -405,7 +394,7 @@ func (s *Server) reportServer() {
 		},
 	}
 
-	s.logger.Info("Sending usage statistics to usage.influxdata.com")
+	s.Logger.Info("Sending usage statistics to usage.influxdata.com")
 
 	go cl.Save(usage)
 }
@@ -442,7 +431,7 @@ func (s *Server) MetaServers() []string {
 
 // Service represents a service attached to the server.
 type Service interface {
-	WithLogger(l apexlog.Interface)
+	WithLogger(l log.Interface)
 	Open() error
 	Close() error
 }
@@ -460,7 +449,7 @@ func startProfile(cpuprofile, memprofile string) {
 		if err != nil {
 			log.Fatalf("cpuprofile: %v", err)
 		}
-		log.Printf("writing CPU profile to: %s\n", cpuprofile)
+		log.Infof("writing CPU profile to: %s\n", cpuprofile)
 		prof.cpu = f
 		pprof.StartCPUProfile(prof.cpu)
 	}
@@ -470,7 +459,7 @@ func startProfile(cpuprofile, memprofile string) {
 		if err != nil {
 			log.Fatalf("memprofile: %v", err)
 		}
-		log.Printf("writing mem profile to: %s\n", memprofile)
+		log.Infof("writing mem profile to: %s\n", memprofile)
 		prof.mem = f
 		runtime.MemProfileRate = 4096
 	}
@@ -482,12 +471,12 @@ func stopProfile() {
 	if prof.cpu != nil {
 		pprof.StopCPUProfile()
 		prof.cpu.Close()
-		log.Println("CPU profile stopped")
+		log.Info("CPU profile stopped")
 	}
 	if prof.mem != nil {
 		pprof.Lookup("heap").WriteTo(prof.mem, 0)
 		prof.mem.Close()
-		log.Println("mem profile stopped")
+		log.Info("mem profile stopped")
 	}
 }
 
