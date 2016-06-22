@@ -4,14 +4,12 @@ import (
 	"errors"
 	"expvar"
 	"fmt"
-	"io"
-	"log"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/apex/log"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/coordinator"
 	"github.com/influxdata/influxdb/services/meta"
@@ -45,7 +43,7 @@ type Service struct {
 		WaitForDataChanged() chan struct{}
 	}
 	NewPointsWriter func(u url.URL) (PointsWriter, error)
-	Logger          *log.Logger
+	Logger          log.Interface
 	update          chan struct{}
 	statMap         *expvar.Map
 	points          chan *coordinator.WritePointsRequest
@@ -62,13 +60,13 @@ type Service struct {
 // NewService returns a subscriber service with given settings
 func NewService(c Config) *Service {
 	s := &Service{
-		Logger:        log.New(os.Stderr, "[subscriber] ", log.LstdFlags),
 		statMap:       influxdb.NewStatistics("subscriber", "subscriber", nil),
 		closed:        true,
 		conf:          c,
 		failures:      &expvar.Int{},
 		pointsWritten: &expvar.Int{},
 	}
+	s.WithLogger(log.Log)
 	s.NewPointsWriter = s.newPointsWriter
 	s.statMap.Set(statWriteFailures, s.failures)
 	s.statMap.Set(statPointsWritten, s.pointsWritten)
@@ -99,7 +97,7 @@ func (s *Service) Open() error {
 		s.waitForMetaUpdates()
 	}()
 
-	s.Logger.Println("opened service")
+	s.Logger.Info("opened service")
 	return nil
 }
 
@@ -114,14 +112,14 @@ func (s *Service) Close() error {
 	close(s.closing)
 
 	s.wg.Wait()
-	s.Logger.Println("closed service")
+	s.Logger.Info("closed service")
 	return nil
 }
 
-// SetLogOutput sets the writer to which all logs are written. It must not be
-// called after Open is called.
-func (s *Service) SetLogOutput(w io.Writer) {
-	s.Logger = log.New(w, "[subscriber] ", log.LstdFlags)
+// WithLogger sets the logger to augment for log messages. It must not be
+// called after the Open method has been called.
+func (s *Service) WithLogger(l log.Interface) {
+	s.Logger = l.WithField("service", "subscriber")
 }
 
 func (s *Service) waitForMetaUpdates() {
@@ -131,7 +129,7 @@ func (s *Service) waitForMetaUpdates() {
 		case <-ch:
 			err := s.Update()
 			if err != nil {
-				s.Logger.Println("error updating subscriptions:", err)
+				s.Logger.WithError(err).Error("error updating subscriptions")
 			}
 		case <-s.closing:
 			return
@@ -205,7 +203,7 @@ func (s *Service) run() {
 		case <-s.update:
 			err := s.updateSubs(subs, &wg)
 			if err != nil {
-				s.Logger.Println("failed to update subscriptions:", err)
+				s.Logger.WithError(err).Error("failed to update subscriptions")
 			}
 		case p, ok := <-s.points:
 			if !ok {
@@ -263,7 +261,7 @@ func (s *Service) updateSubs(subs map[subEntry]chanWriter, wg *sync.WaitGroup) e
 					cw.Run()
 				}()
 				subs[se] = cw
-				s.Logger.Println("added new subscription for", se.db, se.rp)
+				s.Logger.Infof("added new subscription for %s %s", se.db, se.rp)
 			}
 		}
 	}
@@ -276,7 +274,7 @@ func (s *Service) updateSubs(subs map[subEntry]chanWriter, wg *sync.WaitGroup) e
 
 			// Remove it from the set
 			delete(subs, se)
-			s.Logger.Println("deleted old subscription for", se.db, se.rp)
+			s.Logger.Infof("deleted old subscription for %s %s", se.db, se.rp)
 		}
 	}
 
@@ -301,7 +299,7 @@ type chanWriter struct {
 	pw            PointsWriter
 	pointsWritten *expvar.Int
 	failures      *expvar.Int
-	logger        *log.Logger
+	logger        log.Interface
 }
 
 // Close the chanWriter
@@ -313,7 +311,7 @@ func (c chanWriter) Run() {
 	for wr := range c.writeRequests {
 		err := c.pw.WritePoints(wr)
 		if err != nil {
-			c.logger.Println(err)
+			c.logger.Error(err.Error())
 			c.failures.Add(1)
 		} else {
 			c.pointsWritten.Add(int64(len(wr.Points)))

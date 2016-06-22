@@ -8,7 +8,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"log"
+	stdlog "log"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/apex/log"
 	"github.com/bmizerany/pat"
 	"github.com/dgrijalva/jwt-go"
 	"github.com/influxdata/influxdb"
@@ -85,8 +86,8 @@ type Handler struct {
 	ContinuousQuerier continuous_querier.ContinuousQuerier
 
 	Config    *Config
-	Logger    *log.Logger
-	CLFLogger *log.Logger
+	Logger    log.Interface
+	CLFLogger *stdlog.Logger
 	statMap   *expvar.Map
 }
 
@@ -95,8 +96,8 @@ func NewHandler(c Config, statMap *expvar.Map) *Handler {
 	h := &Handler{
 		mux:       pat.New(),
 		Config:    &c,
-		Logger:    log.New(os.Stderr, "[httpd] ", log.LstdFlags),
-		CLFLogger: log.New(os.Stderr, "[httpd] ", 0),
+		Logger:    log.WithField("service", "httpd"),
+		CLFLogger: stdlog.New(os.Stderr, "[httpd] ", 0),
 		statMap:   statMap,
 	}
 
@@ -327,7 +328,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user *meta.
 	if h.Config.AuthEnabled {
 		if err := h.QueryAuthorizer.AuthorizeQuery(user, query, db); err != nil {
 			if err, ok := err.(meta.ErrAuthorize); ok {
-				h.Logger.Printf("Unauthorized request | user: %q | query: %q | database %q\n", err.User, err.Query.String(), err.Database)
+				h.Logger.Infof("Unauthorized request | user: %q | query: %q | database %q\n", err.User, err.Query.String(), err.Database)
 			}
 			h.httpError(w, "error authorizing query: "+err.Error(), pretty, http.StatusUnauthorized)
 			return
@@ -519,7 +520,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user *meta.
 	_, err := buf.ReadFrom(body)
 	if err != nil {
 		if h.Config.WriteTracing {
-			h.Logger.Print("Write handler unable to read bytes from request body")
+			h.Logger.Error("Write handler unable to read bytes from request body")
 		}
 		h.resultError(w, influxql.Result{Err: err}, http.StatusBadRequest)
 		return
@@ -527,7 +528,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user *meta.
 	h.statMap.Add(statWriteRequestBytesReceived, int64(buf.Len()))
 
 	if h.Config.WriteTracing {
-		h.Logger.Printf("Write body received by handler: %s", buf.Bytes())
+		h.Logger.Errorf("Write body received by handler: %s", buf.Bytes())
 	}
 
 	points, parseError := models.ParsePointsWithPrecision(buf.Bytes(), time.Now().UTC(), r.URL.Query().Get("precision"))
@@ -588,7 +589,7 @@ func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 
 // serveStatus has been depricated
 func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
-	h.Logger.Printf("WARNING: /status has been depricated.  Use /ping instead.")
+	h.Logger.Warnf("/status has been deprecated.  Use /ping instead.")
 	h.statMap.Add(statStatusRequest, 1)
 	h.writeHeader(w, http.StatusNoContent)
 }
@@ -930,7 +931,7 @@ func (h *Handler) recovery(inner http.Handler, name string) http.Handler {
 			if err := recover(); err != nil {
 				logLine := buildLogLine(l, r, start)
 				logLine = fmt.Sprintf("%s [panic:%s] %s", logLine, err, debug.Stack())
-				h.Logger.Println(logLine)
+				h.Logger.Error(logLine)
 			}
 		}()
 

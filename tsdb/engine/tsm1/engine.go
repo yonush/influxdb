@@ -106,7 +106,7 @@ func NewEngine(path string, walPath string, opt tsdb.EngineOptions) tsdb.Engine 
 		CacheFlushWriteColdDuration:   time.Duration(opt.Config.CacheSnapshotWriteColdDuration),
 		enableCompactionsOnOpen:       true,
 	}
-	e.SetLogOutput(os.Stderr)
+	e.WithLogger(log.Log)
 
 	return e
 }
@@ -244,15 +244,12 @@ func (e *Engine) Close() error {
 	return e.WAL.Close()
 }
 
-// SetLogOutput sets the logger used for all messages. It must not be called
-// after the Open method has been called.
-func (e *Engine) SetLogOutput(w io.Writer) {
-	e.FileStore.SetLogOutput(w)
-}
-
+// WithLogger sets the logger to augment for log messages. It must not be
+// called after the Open method has been called.
 func (e *Engine) WithLogger(l log.Interface) {
 	e.logger = l.WithField("engine", "tsm1")
 	e.WAL.WithLogger(e.logger)
+	e.FileStore.WithLogger(e.logger)
 }
 
 // LoadMetadataIndex loads the shard metadata into memory.

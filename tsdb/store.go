@@ -174,7 +174,10 @@ func (s *Store) loadShards() error {
 					}
 
 					resC <- &res{s: shard}
-					s.Logger.Infof("%s opened in %s", path, time.Now().Sub(start))
+					s.Logger.WithFields(log.Fields{
+						"path":     path,
+						"duration": time.Now().Sub(start),
+					}).Info("opened store")
 				}(s.databaseIndexes[db], db, rp.Name(), sh.Name())
 			}
 		}

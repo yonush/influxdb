@@ -7,11 +7,11 @@ import (
 	"errors"
 	"expvar"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"time"
 
+	"github.com/apex/log"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/models"
 )
@@ -25,7 +25,7 @@ type Handler struct {
 		WritePoints(database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, points []models.Point) error
 	}
 
-	Logger *log.Logger
+	Logger log.Interface
 
 	statMap *expvar.Map
 }
@@ -113,7 +113,7 @@ func (h *Handler) servePut(w http.ResponseWriter, r *http.Request) {
 
 		pt, err := models.NewPoint(p.Metric, p.Tags, map[string]interface{}{"value": p.Value}, ts)
 		if err != nil {
-			h.Logger.Printf("Dropping point %v: %v", p.Metric, err)
+			h.Logger.WithError(err).Errorf("Dropping point %v", p.Metric)
 			h.statMap.Add(statDroppedPointsInvalid, 1)
 			continue
 		}
@@ -122,11 +122,11 @@ func (h *Handler) servePut(w http.ResponseWriter, r *http.Request) {
 
 	// Write points.
 	if err := h.PointsWriter.WritePoints(h.Database, h.RetentionPolicy, models.ConsistencyLevelAny, points); influxdb.IsClientError(err) {
-		h.Logger.Println("write series error: ", err)
+		h.Logger.WithError(err).Error("write series error")
 		http.Error(w, "write series error: "+err.Error(), http.StatusBadRequest)
 		return
 	} else if err != nil {
-		h.Logger.Println("write series error: ", err)
+		h.Logger.WithError(err).Error("write series error")
 		http.Error(w, "write series error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

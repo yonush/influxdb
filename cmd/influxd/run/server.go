@@ -271,12 +271,12 @@ func (s *Server) Open() error {
 		s.QueryExecutor.SetLogOutput(w)
 	}
 	s.PointsWriter.SetLogOutput(w)
-	s.Subscriber.SetLogOutput(w)
+	s.Subscriber.WithLogger(s.logger)
 	for _, svc := range s.Services {
-		svc.SetLogOutput(w)
+		svc.WithLogger(s.logger)
 	}
-	s.SnapshotterService.SetLogOutput(w)
-	s.Monitor.SetLogOutput(w)
+	s.SnapshotterService.WithLogger(s.logger)
+	s.Monitor.WithLogger(s.logger)
 
 	// Open TSDB store.
 	if err := s.TSDBStore.Open(); err != nil {
@@ -405,7 +405,7 @@ func (s *Server) reportServer() {
 		},
 	}
 
-	s.Logger.Printf("Sending usage statistics to usage.influxdata.com")
+	s.logger.Info("Sending usage statistics to usage.influxdata.com")
 
 	go cl.Save(usage)
 }
@@ -442,7 +442,7 @@ func (s *Server) MetaServers() []string {
 
 // Service represents a service attached to the server.
 type Service interface {
-	SetLogOutput(w io.Writer)
+	WithLogger(l apexlog.Interface)
 	Open() error
 	Close() error
 }

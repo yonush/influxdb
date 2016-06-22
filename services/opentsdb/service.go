@@ -6,16 +6,15 @@ import (
 	"crypto/tls"
 	"expvar"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/textproto"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/apex/log"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/services/meta"
@@ -74,7 +73,7 @@ type Service struct {
 	batcher      *tsdb.PointBatcher
 
 	LogPointErrors bool
-	Logger         *log.Logger
+	Logger         log.Interface
 	statMap        *expvar.Map
 }
 
@@ -94,9 +93,9 @@ func NewService(c Config) (*Service, error) {
 		batchSize:       d.BatchSize,
 		batchPending:    d.BatchPending,
 		batchTimeout:    time.Duration(d.BatchTimeout),
-		Logger:          log.New(os.Stderr, "[opentsdb] ", log.LstdFlags),
 		LogPointErrors:  d.LogPointErrors,
 	}
+	s.WithLogger(log.Log)
 	return s, nil
 }
 
@@ -105,7 +104,7 @@ func (s *Service) Open() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.Logger.Println("Starting OpenTSDB service")
+	s.Logger.Info("Starting OpenTSDB service")
 
 	// Configure expvar monitoring. It's OK to do this even if the service fails to open and
 	// should be done before any data could arrive for the service.
@@ -114,7 +113,7 @@ func (s *Service) Open() error {
 	s.statMap = influxdb.NewStatistics(key, "opentsdb", tags)
 
 	if _, err := s.MetaClient.CreateDatabase(s.Database); err != nil {
-		s.Logger.Printf("Failed to ensure target database %s exists: %s", s.Database, err.Error())
+		s.Logger.WithError(err).Errorf("Failed to ensure target database %s exists", s.Database)
 		return err
 	}
 
@@ -139,7 +138,7 @@ func (s *Service) Open() error {
 			return err
 		}
 
-		s.Logger.Println("Listening on TLS:", listener.Addr().String())
+		s.Logger.Infof("Listening on TLS: %s", listener.Addr().String())
 		s.ln = listener
 	} else {
 		listener, err := net.Listen("tcp", s.BindAddress)
@@ -147,7 +146,7 @@ func (s *Service) Open() error {
 			return err
 		}
 
-		s.Logger.Println("Listening on:", listener.Addr().String())
+		s.Logger.Infof("Listening on: %s", listener.Addr().String())
 		s.ln = listener
 	}
 	s.httpln = newChanListener(s.ln.Addr())
@@ -177,10 +176,10 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// SetLogOutput sets the writer to which all logs are written. It must not be
-// called after Open is called.
-func (s *Service) SetLogOutput(w io.Writer) {
-	s.Logger = log.New(w, "[opentsdb] ", log.LstdFlags)
+// WithLogger sets the logger to augment for log messages. It must not be
+// called after the Open method has been called.
+func (s *Service) WithLogger(l log.Interface) {
+	s.Logger = l.WithField("service", "opentsdb")
 }
 
 // Err returns a channel for fatal errors that occur on the listener.
@@ -202,10 +201,10 @@ func (s *Service) serve() {
 		// Wait for next connection.
 		conn, err := s.ln.Accept()
 		if opErr, ok := err.(*net.OpError); ok && !opErr.Temporary() {
-			s.Logger.Println("openTSDB TCP listener closed")
+			s.Logger.Info("openTSDB TCP listener closed")
 			return
 		} else if err != nil {
-			s.Logger.Println("error accepting openTSDB: ", err.Error())
+			s.Logger.WithError(err).Error("error accepting openTSDB")
 			continue
 		}
 
@@ -263,7 +262,7 @@ func (s *Service) handleTelnetConn(conn net.Conn) {
 		if err != nil {
 			if err != io.EOF {
 				s.statMap.Add(statTelnetReadError, 1)
-				s.Logger.Println("error reading from openTSDB connection", err.Error())
+				s.Logger.WithError(err).Error("error reading from openTSDB connection")
 			}
 			return
 		}
@@ -280,7 +279,7 @@ func (s *Service) handleTelnetConn(conn net.Conn) {
 		if len(inputStrs) < 4 || inputStrs[0] != "put" {
 			s.statMap.Add(statTelnetBadLine, 1)
 			if s.LogPointErrors {
-				s.Logger.Printf("malformed line '%s' from %s", line, remoteAddr)
+				s.Logger.Errorf("malformed line '%s' from %s", line, remoteAddr)
 			}
 			continue
 		}
@@ -295,7 +294,7 @@ func (s *Service) handleTelnetConn(conn net.Conn) {
 		if err != nil {
 			s.statMap.Add(statTelnetBadTime, 1)
 			if s.LogPointErrors {
-				s.Logger.Printf("malformed time '%s' from %s", tsStr, remoteAddr)
+				s.Logger.Errorf("malformed time '%s' from %s", tsStr, remoteAddr)
 			}
 		}
 
@@ -309,7 +308,7 @@ func (s *Service) handleTelnetConn(conn net.Conn) {
 		default:
 			s.statMap.Add(statTelnetBadTime, 1)
 			if s.LogPointErrors {
-				s.Logger.Printf("bad time '%s' must be 10 or 13 chars, from %s ", tsStr, remoteAddr)
+				s.Logger.Errorf("bad time '%s' must be 10 or 13 chars, from %s ", tsStr, remoteAddr)
 			}
 			continue
 		}
@@ -320,7 +319,7 @@ func (s *Service) handleTelnetConn(conn net.Conn) {
 			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 				s.statMap.Add(statTelnetBadTag, 1)
 				if s.LogPointErrors {
-					s.Logger.Printf("malformed tag data '%v' from %s", tagStrs[t], remoteAddr)
+					s.Logger.Errorf("malformed tag data '%v' from %s", tagStrs[t], remoteAddr)
 				}
 				continue
 			}
@@ -334,7 +333,7 @@ func (s *Service) handleTelnetConn(conn net.Conn) {
 		if err != nil {
 			s.statMap.Add(statTelnetBadFloat, 1)
 			if s.LogPointErrors {
-				s.Logger.Printf("bad float '%s' from %s", valueStr, remoteAddr)
+				s.Logger.Errorf("bad float '%s' from %s", valueStr, remoteAddr)
 			}
 			continue
 		}
@@ -344,7 +343,7 @@ func (s *Service) handleTelnetConn(conn net.Conn) {
 		if err != nil {
 			s.statMap.Add(statTelnetBadFloat, 1)
 			if s.LogPointErrors {
-				s.Logger.Printf("bad float '%s' from %s", valueStr, remoteAddr)
+				s.Logger.Errorf("bad float '%s' from %s", valueStr, remoteAddr)
 			}
 			continue
 		}
@@ -374,7 +373,7 @@ func (s *Service) processBatches(batcher *tsdb.PointBatcher) {
 				s.statMap.Add(statBatchesTrasmitted, 1)
 				s.statMap.Add(statPointsTransmitted, int64(len(batch)))
 			} else {
-				s.Logger.Printf("failed to write point batch to database %q: %s", s.Database, err)
+				s.Logger.WithError(err).Errorf("failed to write point batch to database %q", s.Database)
 				s.statMap.Add(statBatchesTransmitFail, 1)
 			}
 

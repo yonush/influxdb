@@ -3,9 +3,7 @@ package tsm1
 import (
 	"expvar"
 	"fmt"
-	"io"
 	"io/ioutil"
-	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -15,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/apex/log"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/tsdb"
 )
@@ -110,7 +109,7 @@ type FileStore struct {
 
 	files []TSMFile
 
-	Logger       *log.Logger
+	Logger       log.Interface
 	traceLogging bool
 
 	statMap *expvar.Map
@@ -141,22 +140,23 @@ func (f FileStat) ContainsKey(key string) bool {
 
 func NewFileStore(dir string) *FileStore {
 	db, rp := tsdb.DecodeStorePath(dir)
-	return &FileStore{
+	f := &FileStore{
 		dir:          dir,
 		lastModified: time.Now(),
-		Logger:       log.New(os.Stderr, "[filestore] ", log.LstdFlags),
 		statMap: influxdb.NewStatistics(
 			"tsm1_filestore:"+dir,
 			"tsm1_filestore",
 			map[string]string{"path": dir, "database": db, "retentionPolicy": rp},
 		),
 	}
+	f.WithLogger(log.Log)
+	return f
 }
 
-// SetLogOutput sets the logger used for all messages. It must not be called
-// after the Open method has been called.
-func (f *FileStore) SetLogOutput(w io.Writer) {
-	f.Logger = log.New(w, "[filestore] ", log.LstdFlags)
+// WithLogger sets the logger to augment for log messages. It must not be
+// called after the Open method has been called.
+func (f *FileStore) WithLogger(l log.Interface) {
+	f.Logger = l.WithField("service", "filestore")
 }
 
 // Returns the number of TSM files currently loaded
@@ -352,7 +352,11 @@ func (f *FileStore) Open() error {
 			start := time.Now()
 			df, err := NewTSMReader(file)
 			if f.traceLogging {
-				f.Logger.Printf("%s (#%d) opened in %v", file.Name(), idx, time.Now().Sub(start))
+				f.Logger.WithFields(log.Fields{
+					"path":     file.Name(),
+					"idx":      idx,
+					"duration": time.Now().Sub(start),
+				}).Info("opened filestore")
 			}
 
 			if err != nil {

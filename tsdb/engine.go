@@ -29,7 +29,6 @@ type Engine interface {
 	Open() error
 	Close() error
 
-	SetLogOutput(io.Writer)
 	WithLogger(log.Interface)
 	LoadMetadataIndex(shardID uint64, index *DatabaseIndex) error
 
