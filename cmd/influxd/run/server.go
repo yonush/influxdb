@@ -268,7 +268,7 @@ func (s *Server) Open() error {
 	s.MetaClient.WithLogger(s.logger)
 	s.TSDBStore.WithLogger(s.logger)
 	if s.config.Data.QueryLogEnabled {
-		s.QueryExecutor.SetLogOutput(w)
+		s.QueryExecutor.WithLogger(s.logger)
 	}
 	s.PointsWriter.SetLogOutput(w)
 	s.Subscriber.WithLogger(s.logger)
