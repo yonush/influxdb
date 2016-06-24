@@ -1,3 +1,9 @@
+## v1.1.0 [unreleased]
+
+### Features
+
+- [#3634](https://github.com/influxdata/influxdb/issues/3634): Support mixed duration units.
+
 ## v1.0.0 [unreleased]
 
 ### Release Notes
