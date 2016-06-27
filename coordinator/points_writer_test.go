@@ -53,7 +53,8 @@ func TestPointsWriter_MapShards_One(t *testing.T) {
 // Ensures the points writer maps a multiple points across shard group boundaries.
 func TestPointsWriter_MapShards_Multiple(t *testing.T) {
 	ms := PointsWriterMetaClient{}
-	rp := NewRetentionPolicy("myp", time.Hour, 3)
+	rp := NewRetentionPolicy("myp", 0, 3)
+	rp.ShardGroupDuration = time.Hour
 	AttachShardGroupInfo(rp, []meta.ShardOwner{
 		{NodeID: 1},
 		{NodeID: 2},
@@ -79,7 +80,9 @@ func TestPointsWriter_MapShards_Multiple(t *testing.T) {
 		panic("should not get here")
 	}
 
-	c := coordinator.PointsWriter{MetaClient: ms}
+	c := coordinator.NewPointsWriter()
+	c.MetaClient = ms
+	defer c.Close()
 	pr := &coordinator.WritePointsRequest{
 		Database:        "mydb",
 		RetentionPolicy: "myrp",
